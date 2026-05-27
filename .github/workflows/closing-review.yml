@@ -1,0 +1,111 @@
+name: 收盘股票复盘
+
+on:
+  # 定时触发 - 每个工作日北京时间 15:10 (UTC 7:10)
+  schedule:
+    - cron: '10 7 * * 1-5'
+
+  # 手动触发（用于测试）
+  workflow_dispatch:
+
+concurrency:
+  group: stock-analysis
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 随机延迟（避免固定时间访问）
+        run: sleep $((RANDOM % 60))
+
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 创建必要目录
+        run: mkdir -p data logs reports
+
+      - name: 执行收盘复盘（大盘 + 个股）
+        env:
+          # === AI 模型：DeepSeek ===
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LLM_DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LLM_DEEPSEEK_BASE_URL: ${{ vars.LLM_DEEPSEEK_BASE_URL || 'https://api.deepseek.com' }}
+          LLM_DEEPSEEK_MODELS: ${{ vars.LLM_DEEPSEEK_MODELS || 'deepseek-v4-pro' }}
+          LLM_DEEPSEEK_ENABLED: ${{ vars.LLM_DEEPSEEK_ENABLED || 'true' }}
+          LLM_CHANNELS: ${{ vars.LLM_CHANNELS || 'deepseek' }}
+
+          # === 搜索服务 ===
+          TAVILY_API_KEYS: ${{ secrets.TAVILY_API_KEYS }}
+          BOCHA_API_KEYS: ${{ secrets.BOCHA_API_KEYS }}
+          SEARXNG_PUBLIC_INSTANCES_ENABLED: ${{ vars.SEARXNG_PUBLIC_INSTANCES_ENABLED || 'true' }}
+
+          # === 通知渠道：飞书 ===
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+
+          # === 自选股 ===
+          STOCK_LIST: ${{ vars.STOCK_LIST || secrets.STOCK_LIST || '600519,000858,601318,600036,000725,300750,002594,600276,601899,600900' }}
+          MARKET_REVIEW_REGION: ${{ vars.MARKET_REVIEW_REGION || 'cn' }}
+          MARKET_REVIEW_ENABLED: 'true'
+
+          # === 运行配置 ===
+          REPORT_TYPE: ${{ vars.CLOSING_REPORT_TYPE || 'full' }}
+          REPORT_LANGUAGE: ${{ vars.REPORT_LANGUAGE || 'zh' }}
+          REPORT_SHOW_LLM_MODEL: 'true'
+          ANALYSIS_DELAY: '0'
+          TRADING_DAY_CHECK_ENABLED: 'true'
+          MAX_WORKERS: ${{ vars.MAX_WORKERS || '1' }}
+
+          # === 系统 ===
+          LOG_LEVEL: INFO
+          REALTIME_SOURCE_PRIORITY: 'tencent,akshare_sina,efinance,akshare_em'
+
+        run: |
+          echo "=========================================="
+          echo "📊 收盘股票复盘"
+          echo "=========================================="
+          echo "⏰ 时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
+          echo "🎯 模式: 完整分析 (大盘 + 个股)"
+          echo "📝 报告: 详细版 (full)"
+          echo ""
+          python main.py
+
+      - name: 上传分析报告
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: closing-reports-${{ github.run_number }}
+          path: |
+            reports/
+            logs/
+          retention-days: 30
+
+      - name: 显示运行结果
+        if: always()
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "📊 收盘复盘完成"
+          echo "=========================================="
+          if [ -d "reports" ] && [ "$(ls -A reports 2>/dev/null)" ]; then
+            echo "生成的报告:"
+            ls -la reports/
+          fi
+          if [ -f "logs/stock_analysis_$(date +%Y%m%d).log" ]; then
+            echo ""
+            echo "📜 最近日志（最后 30 行）:"
+            tail -30 logs/stock_analysis_*.log 2>/dev/null || echo "无日志"
+          fi
